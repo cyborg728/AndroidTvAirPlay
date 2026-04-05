@@ -2,22 +2,32 @@
 
 Apple Container — инструмент от Apple для запуска OCI-совместимых Linux-контейнеров на macOS (Apple Silicon) через Virtualization.framework. Работает без Docker Desktop.
 
+> **Важно:** Android SDK содержит бинарники AAPT2 только для x86_64 Linux.
+> На Apple Silicon необходимо запускать контейнер в режиме x86_64 через Rosetta.
+
 ## Требования
 
 - Mac с Apple Silicon (M1/M2/M3/M4)
 - macOS 15 (Sequoia) или новее
 - Xcode Command Line Tools
 - Swift 6.1+
+- **Rosetta** (для запуска x86_64 контейнеров)
 
-## Установка Apple Container
+## Установка
 
-### Шаг 1. Установите Swift и Xcode CLI
+### Шаг 1. Установите Rosetta
+
+```bash
+softwareupdate --install-rosetta --agree-to-license
+```
+
+### Шаг 2. Установите Swift и Xcode CLI
 
 ```bash
 xcode-select --install
 ```
 
-### Шаг 2. Установите container tool
+### Шаг 3. Установите container tool
 
 ```bash
 git clone https://github.com/apple/container
@@ -34,30 +44,28 @@ container --help
 
 ## Сборка APK
 
-### Шаг 3. Соберите Docker-образ
-
-Apple Container поддерживает OCI-образы и может использовать существующий `Dockerfile` из проекта.
+### Шаг 4. Соберите Docker-образ (x86_64)
 
 Из корня проекта:
 
 ```bash
-container build --tag android-builder .
+container build --platform linux/amd64 --tag android-builder .
 ```
 
-> **Примечание:** Apple Container использует тот же формат Dockerfile, что и Docker.
-> Образ `eclipse-temurin:17-jdk-jammy` — это Linux (arm64), который отлично работает на Apple Silicon.
+Образ собирается под x86_64 — это **обязательно**, т.к. AAPT2 (часть Android build tools)
+доступен только как x86_64 бинарник для Linux. На arm64 он не запустится.
 
-### Шаг 4. Запустите сборку
+### Шаг 5. Запустите сборку
 
 ```bash
-container run --rm --memory 4g \
+container run --rm --memory 6g --platform linux/amd64 \
   --mount "type=bind,source=$(pwd),target=/project" \
   android-builder \
   ./gradlew assembleDebug
 ```
 
-> **Важно:** Флаг `--memory 4g` выделяет контейнеру 4 ГБ RAM. Если сборка падает
-> с ошибкой «daemon disappeared», увеличьте до `--memory 6g`.
+> **Важно:** Выделите контейнеру минимум 6 ГБ RAM (`--memory 6g`).
+> Сборка под Rosetta (x86_64 эмуляция) потребляет больше памяти.
 
 APK появится в:
 
@@ -65,10 +73,10 @@ APK появится в:
 app/build/outputs/apk/debug/app-debug.apk
 ```
 
-### Шаг 5. Release-версия (опционально)
+### Шаг 6. Release-версия (опционально)
 
 ```bash
-container run --rm \
+container run --rm --memory 6g --platform linux/amd64 \
   --mount "type=bind,source=$(pwd),target=/project" \
   android-builder \
   ./gradlew assembleRelease
@@ -77,19 +85,19 @@ container run --rm \
 ## Всё одной командой
 
 ```bash
-container build --tag android-builder . && \
-container run --rm \
+container build --platform linux/amd64 --tag android-builder . && \
+container run --rm --memory 6g --platform linux/amd64 \
   --mount "type=bind,source=$(pwd),target=/project" \
   android-builder \
   ./gradlew assembleDebug
 ```
 
-## Кэширование Gradle
+## Кэширование Gradle (ускорение повторных сборок)
 
-Для ускорения повторных сборок создайте именованный volume:
+Чтобы не скачивать зависимости каждый раз, добавьте volume для Gradle-кэша:
 
 ```bash
-container run --rm \
+container run --rm --memory 6g --platform linux/amd64 \
   --mount "type=bind,source=$(pwd),target=/project" \
   --mount "type=volume,source=gradle-cache,target=/root/.gradle" \
   android-builder \
@@ -116,16 +124,18 @@ adb install app/build/outputs/apk/debug/app-debug.apk
 ```bash
 brew install --cask docker
 # Запустите Docker Desktop, затем:
-docker build -t android-builder .
-docker run --rm -v "$(pwd)":/project android-builder ./gradlew assembleDebug
+docker build --platform linux/amd64 -t android-builder .
+docker run --rm --platform linux/amd64 -m 6g -v "$(pwd)":/project android-builder ./gradlew assembleDebug
 ```
 
 ## Возможные проблемы
 
 | Проблема | Решение |
 |----------|---------|
+| AAPT2: `Syntax error: Unterminated quoted string` | Контейнер запущен под arm64. Добавьте `--platform linux/amd64` |
+| `Gradle daemon disappeared` | Увеличьте память: `--memory 8g` |
 | `container: command not found` | Убедитесь, что бинарник скопирован в `/usr/local/bin/` |
 | Ошибка Virtualization.framework | Требуется macOS 15+ и Apple Silicon |
 | `Permission denied` для gradlew | `chmod +x gradlew` перед сборкой |
-| Медленная первая сборка | Нормально — скачиваются Gradle и Android SDK. Используйте volume для кэша |
-| Архитектура arm64 vs x86_64 | На Apple Silicon образ собирается под arm64 — это корректно для Android SDK |
+| Rosetta не установлена | `softwareupdate --install-rosetta --agree-to-license` |
+| Медленная сборка | Нормально для x86_64 эмуляции. Используйте volume для Gradle-кэша |
