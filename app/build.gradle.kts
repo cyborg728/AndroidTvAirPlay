@@ -51,4 +51,7 @@ dependencies {
 
     // jmDNS for Bonjour/mDNS service advertisement
     implementation("org.jmdns:jmdns:3.5.9")
+
+    // Bouncy Castle for AirPlay 2 crypto (Curve25519, Ed25519, ChaCha20-Poly1305)
+    implementation("org.bouncycastle:bcprov-jdk18on:1.77")
 }

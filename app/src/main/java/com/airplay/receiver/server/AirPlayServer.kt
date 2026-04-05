@@ -1,16 +1,16 @@
 package com.airplay.receiver.server
 
 import android.util.Log
+import com.airplay.receiver.crypto.PairSetupHandler
+import com.airplay.receiver.crypto.PairVerifyHandler
 import fi.iki.elonen.NanoHTTPD
 import java.io.BufferedReader
+import java.io.ByteArrayInputStream
 import java.io.InputStreamReader
 
 /**
  * Embedded HTTP server that handles AirPlay protocol requests.
- *
- * AirPlay video streaming works by the sender (iPhone/iPad/Mac) sending
- * an HTTP POST to /play with the video URL in the body. The receiver
- * then plays the video from that URL.
+ * Supports AirPlay 2 transient pairing for modern iOS devices.
  */
 class AirPlayServer(
     port: Int,
@@ -38,6 +38,9 @@ class AirPlayServer(
         val isPlaying: Boolean = false
     )
 
+    private val pairSetupHandler = PairSetupHandler()
+    private var pairVerifyHandler = PairVerifyHandler()
+
     override fun serve(session: IHTTPSession): Response {
         val uri = session.uri
         val method = session.method
@@ -45,68 +48,101 @@ class AirPlayServer(
 
         return try {
             when {
-                // POST /play — start video playback
                 method == Method.POST && uri == "/play" -> handlePlay(session)
-
-                // POST /stop — stop playback
                 method == Method.POST && uri == "/stop" -> handleStop()
-
-                // POST /rate — pause/resume (rate=0 means pause, rate=1 means play)
                 method == Method.POST && uri == "/rate" -> handleRate(session)
-
-                // POST /scrub — seek to position
                 method == Method.POST && uri == "/scrub" -> handleScrub(session)
-
-                // GET /scrub — get current position
                 method == Method.GET && uri == "/scrub" -> handleGetScrub()
-
-                // GET /playback-info — get playback status
                 method == Method.GET && uri == "/playback-info" -> handlePlaybackInfo()
-
-                // POST /action — handle generic actions
                 method == Method.POST && uri == "/action" -> handleAction(session)
-
-                // GET /server-info — server capabilities
                 method == Method.GET && uri == "/server-info" -> handleServerInfo()
-
-                // GET /info — modern AirPlay device info
                 method == Method.GET && uri == "/info" -> handleInfo()
-
-                // POST /pair-setup — AirPlay 2 pairing (stub)
                 method == Method.POST && uri == "/pair-setup" -> handlePairSetup(session)
-
-                // POST /pair-verify — AirPlay 2 verification (stub)
                 method == Method.POST && uri == "/pair-verify" -> handlePairVerify(session)
-
-                // POST /fp-setup — FairPlay setup (stub)
                 method == Method.POST && uri == "/fp-setup" -> handleFpSetup(session)
-
-                // Respond OK to anything else
+                method == Method.POST && uri == "/feedback" -> handleFeedback(session)
+                method == Method.POST && (uri == "/command" || uri == "/action") -> handleCommand(session)
+                method == Method.GET && uri == "/artwork" -> handleArtwork()
                 else -> {
                     Log.d(TAG, "Unhandled request: $method $uri")
                     newFixedLengthResponse(Response.Status.OK, MIME_PLAINTEXT, "OK")
                 }
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Error handling request", e)
+            Log.e(TAG, "Error handling request: $method $uri", e)
             newFixedLengthResponse(Response.Status.INTERNAL_ERROR, MIME_PLAINTEXT, "Error")
         }
     }
 
-    private fun handlePlay(session: IHTTPSession): Response {
+    private fun readBodyBytes(session: IHTTPSession): ByteArray {
         val contentLength = session.headers["content-length"]?.toIntOrNull() ?: 0
-        val body = if (contentLength > 0) {
-            val reader = BufferedReader(InputStreamReader(session.inputStream))
-            val buffer = CharArray(contentLength)
-            reader.read(buffer, 0, contentLength)
-            String(buffer)
-        } else {
-            ""
+        if (contentLength <= 0) return ByteArray(0)
+        val buffer = ByteArray(contentLength)
+        var totalRead = 0
+        while (totalRead < contentLength) {
+            val read = session.inputStream.read(buffer, totalRead, contentLength - totalRead)
+            if (read < 0) break
+            totalRead += read
+        }
+        return if (totalRead == contentLength) buffer else buffer.copyOf(totalRead)
+    }
+
+    private fun readBodyString(session: IHTTPSession): String {
+        val bytes = readBodyBytes(session)
+        return String(bytes)
+    }
+
+    // --- Pairing handlers ---
+
+    private fun handlePairSetup(session: IHTTPSession): Response {
+        val data = readBodyBytes(session)
+        Log.d(TAG, "pair-setup: received ${data.size} bytes")
+
+        val responseData = pairSetupHandler.handle(data)
+
+        Log.d(TAG, "pair-setup: responding with ${responseData.size} bytes")
+        return newFixedLengthResponse(
+            Response.Status.OK,
+            "application/octet-stream",
+            ByteArrayInputStream(responseData),
+            responseData.size.toLong()
+        )
+    }
+
+    private fun handlePairVerify(session: IHTTPSession): Response {
+        val data = readBodyBytes(session)
+        Log.d(TAG, "pair-verify: received ${data.size} bytes")
+
+        val responseData = pairVerifyHandler.handle(data)
+
+        if (pairVerifyHandler.isComplete()) {
+            Log.d(TAG, "pair-verify: COMPLETE - session established!")
+            // Reset for next connection
+            pairVerifyHandler = PairVerifyHandler()
         }
 
+        Log.d(TAG, "pair-verify: responding with ${responseData.size} bytes")
+        return newFixedLengthResponse(
+            Response.Status.OK,
+            "application/octet-stream",
+            ByteArrayInputStream(responseData),
+            responseData.size.toLong()
+        )
+    }
+
+    private fun handleFpSetup(session: IHTTPSession): Response {
+        val data = readBodyBytes(session)
+        Log.d(TAG, "fp-setup: received ${data.size} bytes (FairPlay - acknowledging)")
+        // FairPlay DRM setup — return empty OK to skip DRM
+        return newFixedLengthResponse(Response.Status.OK, "application/octet-stream", "")
+    }
+
+    // --- Playback handlers ---
+
+    private fun handlePlay(session: IHTTPSession): Response {
+        val body = readBodyString(session)
         Log.d(TAG, "Play body: $body")
 
-        // Parse the plist-style body to extract Content-Location and Start-Position
         var videoUrl = ""
         var startPosition = 0.0
 
@@ -139,13 +175,7 @@ class AirPlayServer(
         val params = session.parms
         val rate = params["value"]?.toFloatOrNull() ?: 1.0f
         Log.d(TAG, "Rate: $rate")
-
-        if (rate == 0.0f) {
-            listener.onVideoPause()
-        } else {
-            listener.onVideoResume()
-        }
-
+        if (rate == 0.0f) listener.onVideoPause() else listener.onVideoResume()
         return newFixedLengthResponse(Response.Status.OK, MIME_PLAINTEXT, "OK")
     }
 
@@ -208,16 +238,27 @@ class AirPlayServer(
     }
 
     private fun handleAction(session: IHTTPSession): Response {
-        val contentLength = session.headers["content-length"]?.toIntOrNull() ?: 0
-        if (contentLength > 0) {
-            val reader = BufferedReader(InputStreamReader(session.inputStream))
-            val buffer = CharArray(contentLength)
-            reader.read(buffer, 0, contentLength)
-            val body = String(buffer)
-            Log.d(TAG, "Action body: $body")
-        }
+        val body = readBodyString(session)
+        if (body.isNotEmpty()) Log.d(TAG, "Action body: $body")
         return newFixedLengthResponse(Response.Status.OK, MIME_PLAINTEXT, "OK")
     }
+
+    private fun handleCommand(session: IHTTPSession): Response {
+        val body = readBodyString(session)
+        if (body.isNotEmpty()) Log.d(TAG, "Command body: $body")
+        return newFixedLengthResponse(Response.Status.OK, MIME_PLAINTEXT, "OK")
+    }
+
+    private fun handleFeedback(session: IHTTPSession): Response {
+        readBodyBytes(session) // consume body
+        return newFixedLengthResponse(Response.Status.OK, MIME_PLAINTEXT, "OK")
+    }
+
+    private fun handleArtwork(): Response {
+        return newFixedLengthResponse(Response.Status.NOT_FOUND, MIME_PLAINTEXT, "")
+    }
+
+    // --- Info handlers ---
 
     private fun handleServerInfo(): Response {
         val plist = """<?xml version="1.0" encoding="UTF-8"?>
@@ -268,39 +309,5 @@ class AirPlayServer(
 </dict>
 </plist>"""
         return newFixedLengthResponse(Response.Status.OK, "text/x-apple-plist+xml", plist)
-    }
-
-    private fun handlePairSetup(session: IHTTPSession): Response {
-        val contentLength = session.headers["content-length"]?.toIntOrNull() ?: 0
-        Log.d(TAG, "pair-setup request, content-length: $contentLength")
-        if (contentLength > 0) {
-            val buffer = ByteArray(contentLength)
-            session.inputStream.read(buffer, 0, contentLength)
-            Log.d(TAG, "pair-setup data size: ${buffer.size}")
-        }
-        // Return empty 200 — iOS will retry or fall back
-        return newFixedLengthResponse(Response.Status.OK, "application/octet-stream", "")
-    }
-
-    private fun handlePairVerify(session: IHTTPSession): Response {
-        val contentLength = session.headers["content-length"]?.toIntOrNull() ?: 0
-        Log.d(TAG, "pair-verify request, content-length: $contentLength")
-        if (contentLength > 0) {
-            val buffer = ByteArray(contentLength)
-            session.inputStream.read(buffer, 0, contentLength)
-            Log.d(TAG, "pair-verify data size: ${buffer.size}")
-        }
-        return newFixedLengthResponse(Response.Status.OK, "application/octet-stream", "")
-    }
-
-    private fun handleFpSetup(session: IHTTPSession): Response {
-        val contentLength = session.headers["content-length"]?.toIntOrNull() ?: 0
-        Log.d(TAG, "fp-setup request, content-length: $contentLength")
-        if (contentLength > 0) {
-            val buffer = ByteArray(contentLength)
-            session.inputStream.read(buffer, 0, contentLength)
-            Log.d(TAG, "fp-setup data size: ${buffer.size}")
-        }
-        return newFixedLengthResponse(Response.Status.OK, "application/octet-stream", "")
     }
 }
