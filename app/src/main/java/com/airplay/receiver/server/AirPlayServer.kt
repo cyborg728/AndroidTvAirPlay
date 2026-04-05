@@ -69,6 +69,18 @@ class AirPlayServer(
                 // GET /server-info — server capabilities
                 method == Method.GET && uri == "/server-info" -> handleServerInfo()
 
+                // GET /info — modern AirPlay device info
+                method == Method.GET && uri == "/info" -> handleInfo()
+
+                // POST /pair-setup — AirPlay 2 pairing (stub)
+                method == Method.POST && uri == "/pair-setup" -> handlePairSetup(session)
+
+                // POST /pair-verify — AirPlay 2 verification (stub)
+                method == Method.POST && uri == "/pair-verify" -> handlePairVerify(session)
+
+                // POST /fp-setup — FairPlay setup (stub)
+                method == Method.POST && uri == "/fp-setup" -> handleFpSetup(session)
+
                 // Respond OK to anything else
                 else -> {
                     Log.d(TAG, "Unhandled request: $method $uri")
@@ -225,5 +237,70 @@ class AirPlayServer(
 </dict>
 </plist>"""
         return newFixedLengthResponse(Response.Status.OK, "text/x-apple-plist+xml", plist)
+    }
+
+    private fun handleInfo(): Response {
+        Log.d(TAG, "Handling /info request")
+        val plist = """<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>deviceid</key>
+    <string>AA:BB:CC:DD:EE:FF</string>
+    <key>features</key>
+    <integer>1383391223</integer>
+    <key>model</key>
+    <string>AppleTV3,2</string>
+    <key>name</key>
+    <string>Android TV AirPlay</string>
+    <key>protovers</key>
+    <string>1.0</string>
+    <key>srcvers</key>
+    <string>220.68</string>
+    <key>statusFlags</key>
+    <integer>68</integer>
+    <key>pi</key>
+    <string>2e388006-13ba-4041-9a67-25dd4a43d536</string>
+    <key>pk</key>
+    <data>sHcn1vbNbgi1hXHVJTkfmb6Y6HROXbzuXMtwVIXgW3E=</data>
+    <key>vv</key>
+    <integer>2</integer>
+</dict>
+</plist>"""
+        return newFixedLengthResponse(Response.Status.OK, "text/x-apple-plist+xml", plist)
+    }
+
+    private fun handlePairSetup(session: IHTTPSession): Response {
+        val contentLength = session.headers["content-length"]?.toIntOrNull() ?: 0
+        Log.d(TAG, "pair-setup request, content-length: $contentLength")
+        if (contentLength > 0) {
+            val buffer = ByteArray(contentLength)
+            session.inputStream.read(buffer, 0, contentLength)
+            Log.d(TAG, "pair-setup data size: ${buffer.size}")
+        }
+        // Return empty 200 — iOS will retry or fall back
+        return newFixedLengthResponse(Response.Status.OK, "application/octet-stream", "")
+    }
+
+    private fun handlePairVerify(session: IHTTPSession): Response {
+        val contentLength = session.headers["content-length"]?.toIntOrNull() ?: 0
+        Log.d(TAG, "pair-verify request, content-length: $contentLength")
+        if (contentLength > 0) {
+            val buffer = ByteArray(contentLength)
+            session.inputStream.read(buffer, 0, contentLength)
+            Log.d(TAG, "pair-verify data size: ${buffer.size}")
+        }
+        return newFixedLengthResponse(Response.Status.OK, "application/octet-stream", "")
+    }
+
+    private fun handleFpSetup(session: IHTTPSession): Response {
+        val contentLength = session.headers["content-length"]?.toIntOrNull() ?: 0
+        Log.d(TAG, "fp-setup request, content-length: $contentLength")
+        if (contentLength > 0) {
+            val buffer = ByteArray(contentLength)
+            session.inputStream.read(buffer, 0, contentLength)
+            Log.d(TAG, "fp-setup data size: ${buffer.size}")
+        }
+        return newFixedLengthResponse(Response.Status.OK, "application/octet-stream", "")
     }
 }
