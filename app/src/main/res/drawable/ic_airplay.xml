@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="120dp"
+    android:height="120dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- AirPlay-style icon: screen with triangle -->
+    <path
+        android:fillColor="#FF4FC3F7"
+        android:pathData="M1,18V3h22v15h-7l-1,-1h7V4H2v13h7l-1,1z" />
+    <path
+        android:fillColor="#FF4FC3F7"
+        android:pathData="M12,14l7,8H5z" />
+</vector>

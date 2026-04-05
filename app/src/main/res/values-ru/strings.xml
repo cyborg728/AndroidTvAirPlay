@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">AirPlay Приёмник</string>
+    <string name="status_waiting">Ожидание подключения AirPlay…</string>
+    <string name="status_playing">Воспроизведение видео через AirPlay</string>
+    <string name="status_service_running">Служба AirPlay запущена</string>
+    <string name="btn_start">Запустить AirPlay</string>
+    <string name="btn_stop">Остановить AirPlay</string>
+    <string name="notification_channel">Служба AirPlay</string>
+    <string name="notification_title">AirPlay Приёмник</string>
+    <string name="notification_text">Ожидание подключений AirPlay</string>
+    <string name="device_name_label">Имя устройства:</string>
+    <string name="ip_address_label">IP адрес:</string>
+    <string name="auto_start_label">Запуск при включении</string>
+</resources>

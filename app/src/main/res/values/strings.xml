@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">AirPlay Receiver</string>
+    <string name="status_waiting">Waiting for AirPlay connection…</string>
+    <string name="status_playing">Playing video via AirPlay</string>
+    <string name="status_service_running">AirPlay service is running</string>
+    <string name="btn_start">Start AirPlay Service</string>
+    <string name="btn_stop">Stop AirPlay Service</string>
+    <string name="notification_channel">AirPlay Service</string>
+    <string name="notification_title">AirPlay Receiver</string>
+    <string name="notification_text">Listening for AirPlay connections</string>
+    <string name="device_name_label">Device name:</string>
+    <string name="ip_address_label">IP address:</string>
+    <string name="auto_start_label">Start on boot</string>
+</resources>
