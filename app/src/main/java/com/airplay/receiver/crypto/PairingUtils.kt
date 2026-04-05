@@ -9,7 +9,7 @@ import org.bouncycastle.crypto.params.HKDFParameters
 import org.bouncycastle.crypto.params.X25519PrivateKeyParameters
 import org.bouncycastle.crypto.params.X25519PublicKeyParameters
 import org.bouncycastle.crypto.signers.Ed25519Signer
-import org.bouncycastle.jcajce.provider.digest.SHA512
+import org.bouncycastle.crypto.digests.SHA512Digest
 import java.security.SecureRandom
 
 /**
@@ -50,7 +50,7 @@ object PairingUtils {
         info: ByteArray,
         outputLength: Int
     ): ByteArray {
-        val hkdf = HKDFBytesGenerator(SHA512.Digest())
+        val hkdf = HKDFBytesGenerator(SHA512Digest())
         hkdf.init(HKDFParameters(inputKeyMaterial, salt, info))
         val output = ByteArray(outputLength)
         hkdf.generateBytes(output, 0, outputLength)
