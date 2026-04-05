@@ -41,15 +41,19 @@ class AirPlayMdnsService(private val context: Context) {
 
                 jmDNS = JmDNS.create(ipAddress, deviceName)
 
+                val deviceId = getMacAddress() ?: "AA:BB:CC:DD:EE:FF"
+
                 // AirPlay service properties
+                // features bitmask: video(1) + photo(2) + slideshow(4) + screen(8) + audio(16) + video_http(32) + video_volume(64)
+                // 0x527FFFF7 is a commonly accepted value for video-capable AirPlay receivers
                 val props = mapOf(
-                    "deviceid" to "00:11:22:33:44:55",
-                    "features" to "0x77",
-                    "model" to "AndroidTV",
-                    "srcvers" to "150.33",
-                    "flags" to "0x04",
-                    "pk" to "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                    "pi" to "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                    "deviceid" to deviceId,
+                    "features" to "0x527FFFF7",
+                    "model" to "AppleTV3,2",
+                    "srcvers" to "220.68",
+                    "flags" to "0x44",
+                    "pk" to "b07727d6f6cd6e08b58571d525391f99be98e8744e5dbcee5ccb705485e05b71",
+                    "pi" to "2e388006-13ba-4041-9a67-25dd4a43d536",
                     "vv" to "2"
                 )
 
@@ -131,6 +135,22 @@ class AirPlayMdnsService(private val context: Context) {
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error getting IP from NetworkInterface", e)
+        }
+        return null
+    }
+
+    private fun getMacAddress(): String? {
+        try {
+            val interfaces = NetworkInterface.getNetworkInterfaces() ?: return null
+            for (intf in interfaces) {
+                val name = intf.name.lowercase()
+                if (!name.startsWith("wlan") && !name.startsWith("eth") && !name.startsWith("en")) continue
+                val mac = intf.hardwareAddress ?: continue
+                if (mac.isEmpty()) continue
+                return mac.joinToString(":") { String.format("%02X", it) }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error getting MAC address", e)
         }
         return null
     }

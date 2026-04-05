@@ -213,15 +213,15 @@ class AirPlayServer(
 <plist version="1.0">
 <dict>
     <key>deviceid</key>
-    <string>00:11:22:33:44:55</string>
+    <string>AA:BB:CC:DD:EE:FF</string>
     <key>features</key>
-    <integer>119</integer>
+    <integer>1383391223</integer>
     <key>model</key>
-    <string>AndroidTV</string>
+    <string>AppleTV3,2</string>
     <key>protovers</key>
     <string>1.0</string>
     <key>srcvers</key>
-    <string>150.33</string>
+    <string>220.68</string>
 </dict>
 </plist>"""
         return newFixedLengthResponse(Response.Status.OK, "text/x-apple-plist+xml", plist)
