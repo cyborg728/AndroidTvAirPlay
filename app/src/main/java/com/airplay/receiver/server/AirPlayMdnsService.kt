@@ -3,7 +3,9 @@ package com.airplay.receiver.server
 import android.content.Context
 import android.net.wifi.WifiManager
 import android.util.Log
+import java.net.Inet4Address
 import java.net.InetAddress
+import java.net.NetworkInterface
 import javax.jmdns.JmDNS
 import javax.jmdns.ServiceInfo
 
@@ -90,24 +92,59 @@ class AirPlayMdnsService(private val context: Context) {
     }
 
     private fun getDeviceIpAddress(wifiManager: WifiManager): InetAddress {
+        // Try NetworkInterface first (no permissions needed)
+        getIpFromNetworkInterface()?.let { return it }
+
+        // Fallback to WifiManager (needs ACCESS_FINE_LOCATION on Android 8+)
         @Suppress("DEPRECATION")
-        val wifiInfo = wifiManager.connectionInfo
-        @Suppress("DEPRECATION")
-        val ipInt = wifiInfo.ipAddress
-        val ipBytes = byteArrayOf(
-            (ipInt and 0xff).toByte(),
-            (ipInt shr 8 and 0xff).toByte(),
-            (ipInt shr 16 and 0xff).toByte(),
-            (ipInt shr 24 and 0xff).toByte()
-        )
-        return InetAddress.getByAddress(ipBytes)
+        val ipInt = wifiManager.connectionInfo.ipAddress
+        if (ipInt != 0) {
+            val ipBytes = byteArrayOf(
+                (ipInt and 0xff).toByte(),
+                (ipInt shr 8 and 0xff).toByte(),
+                (ipInt shr 16 and 0xff).toByte(),
+                (ipInt shr 24 and 0xff).toByte()
+            )
+            return InetAddress.getByAddress(ipBytes)
+        }
+
+        return InetAddress.getLocalHost()
+    }
+
+    private fun getIpFromNetworkInterface(): InetAddress? {
+        try {
+            val interfaces = NetworkInterface.getNetworkInterfaces() ?: return null
+            for (intf in interfaces) {
+                // Look for wlan or eth interfaces
+                val name = intf.name.lowercase()
+                if (!name.startsWith("wlan") && !name.startsWith("eth") && !name.startsWith("en")) {
+                    continue
+                }
+                if (!intf.isUp || intf.isLoopback) continue
+
+                for (addr in intf.inetAddresses) {
+                    if (addr is Inet4Address && !addr.isLoopbackAddress) {
+                        Log.d(TAG, "Found IP via NetworkInterface(${intf.name}): ${addr.hostAddress}")
+                        return addr
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error getting IP from NetworkInterface", e)
+        }
+        return null
     }
 
     fun getIpAddressString(): String {
+        getIpFromNetworkInterface()?.let { return it.hostAddress ?: "0.0.0.0" }
+
         val wifiManager = context.applicationContext
             .getSystemService(Context.WIFI_SERVICE) as WifiManager
         @Suppress("DEPRECATION")
         val ipInt = wifiManager.connectionInfo.ipAddress
-        return "${ipInt and 0xff}.${ipInt shr 8 and 0xff}.${ipInt shr 16 and 0xff}.${ipInt shr 24 and 0xff}"
+        if (ipInt != 0) {
+            return "${ipInt and 0xff}.${ipInt shr 8 and 0xff}.${ipInt shr 16 and 0xff}.${ipInt shr 24 and 0xff}"
+        }
+        return "0.0.0.0"
     }
 }
