@@ -50,11 +50,14 @@ container build --tag android-builder .
 ### Шаг 4. Запустите сборку
 
 ```bash
-container run --rm \
+container run --rm --memory 4g \
   --mount "type=bind,source=$(pwd),target=/project" \
   android-builder \
   ./gradlew assembleDebug
 ```
+
+> **Важно:** Флаг `--memory 4g` выделяет контейнеру 4 ГБ RAM. Если сборка падает
+> с ошибкой «daemon disappeared», увеличьте до `--memory 6g`.
 
 APK появится в:
 

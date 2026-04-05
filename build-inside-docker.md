@@ -22,8 +22,11 @@ docker build -t android-builder .
 ### 2. Соберите APK
 
 ```bash
-docker run --rm -v "$(pwd)":/project android-builder ./gradlew assembleDebug
+docker run --rm -m 4g -v "$(pwd)":/project android-builder ./gradlew assembleDebug
 ```
+
+> **Важно:** Флаг `-m 4g` выделяет контейнеру 4 ГБ RAM. Если сборка падает
+> с ошибкой «daemon disappeared», увеличьте до `-m 6g`.
 
 APK появится в:
 
