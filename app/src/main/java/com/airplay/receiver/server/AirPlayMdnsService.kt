@@ -12,23 +12,28 @@ import javax.jmdns.ServiceInfo
 /**
  * Manages mDNS (Bonjour) advertisement so Apple devices can discover
  * this Android TV as an AirPlay receiver on the local network.
+ *
+ * Registers both _airplay._tcp and _raop._tcp services — modern iOS
+ * requires both for AirPlay 2 video discovery.
  */
 class AirPlayMdnsService(private val context: Context) {
 
     companion object {
         private const val TAG = "AirPlayMdns"
         private const val AIRPLAY_SERVICE_TYPE = "_airplay._tcp.local."
+        private const val RAOP_SERVICE_TYPE = "_raop._tcp.local."
         private const val AIRPLAY_PORT = 7000
     }
 
     private var jmDNS: JmDNS? = null
     private var multicastLock: WifiManager.MulticastLock? = null
-    private var serviceInfo: ServiceInfo? = null
+    private var airplayServiceInfo: ServiceInfo? = null
+    private var raopServiceInfo: ServiceInfo? = null
+    private var deviceMac: String = "AA:BB:CC:DD:EE:FF"
 
     fun start(deviceName: String) {
         Thread {
             try {
-                // Acquire multicast lock to receive mDNS packets
                 val wifiManager = context.applicationContext
                     .getSystemService(Context.WIFI_SERVICE) as WifiManager
                 multicastLock = wifiManager.createMulticastLock("airplay-mdns").apply {
@@ -41,33 +46,61 @@ class AirPlayMdnsService(private val context: Context) {
 
                 jmDNS = JmDNS.create(ipAddress, deviceName)
 
-                val deviceId = getMacAddress() ?: "AA:BB:CC:DD:EE:FF"
+                deviceMac = getMacAddress() ?: "AA:BB:CC:DD:EE:FF"
+                val macHex = deviceMac.replace(":", "")
 
-                // AirPlay service properties
-                // features bitmask: video(1) + photo(2) + slideshow(4) + screen(8) + audio(16) + video_http(32) + video_volume(64)
-                // 0x527FFFF7 is a commonly accepted value for video-capable AirPlay receivers
-                val props = mapOf(
-                    "deviceid" to deviceId,
-                    "features" to "0x527FFFF7",
-                    "model" to "AppleTV3,2",
-                    "srcvers" to "220.68",
+                // === Register _airplay._tcp ===
+                val airplayProps = mapOf(
+                    "deviceid" to deviceMac,
+                    "features" to "0x5A7FFFF7,0x1E",
                     "flags" to "0x44",
-                    "pk" to "b07727d6f6cd6e08b58571d525391f99be98e8744e5dbcee5ccb705485e05b71",
+                    "model" to "AppleTV3,2",
                     "pi" to "2e388006-13ba-4041-9a67-25dd4a43d536",
+                    "pk" to "b07727d6f6cd6e08b58571d525391f99be98e8744e5dbcee5ccb705485e05b71",
+                    "srcvers" to "220.68",
                     "vv" to "2"
                 )
 
-                serviceInfo = ServiceInfo.create(
+                airplayServiceInfo = ServiceInfo.create(
                     AIRPLAY_SERVICE_TYPE,
                     deviceName,
                     AIRPLAY_PORT,
-                    0, // weight
-                    0, // priority
-                    props
+                    0, 0,
+                    airplayProps
+                )
+                jmDNS?.registerService(airplayServiceInfo)
+                Log.d(TAG, "AirPlay service registered: $deviceName on port $AIRPLAY_PORT")
+
+                // === Register _raop._tcp ===
+                // RAOP service name format: MACADDRESS@DeviceName
+                val raopName = "${macHex}@${deviceName}"
+                val raopProps = mapOf(
+                    "am" to "AppleTV3,2",
+                    "cn" to "0,1,2,3",
+                    "da" to "true",
+                    "et" to "0,3,5",
+                    "ft" to "0x5A7FFFF7,0x1E",
+                    "md" to "0,1,2",
+                    "pk" to "b07727d6f6cd6e08b58571d525391f99be98e8744e5dbcee5ccb705485e05b71",
+                    "sf" to "0x44",
+                    "sr" to "44100",
+                    "ss" to "16",
+                    "sv" to "false",
+                    "tp" to "UDP",
+                    "vn" to "65537",
+                    "vs" to "220.68",
+                    "vv" to "2"
                 )
 
-                jmDNS?.registerService(serviceInfo)
-                Log.d(TAG, "AirPlay mDNS service registered: $deviceName on port $AIRPLAY_PORT")
+                raopServiceInfo = ServiceInfo.create(
+                    RAOP_SERVICE_TYPE,
+                    raopName,
+                    AIRPLAY_PORT,
+                    0, 0,
+                    raopProps
+                )
+                jmDNS?.registerService(raopServiceInfo)
+                Log.d(TAG, "RAOP service registered: $raopName on port $AIRPLAY_PORT")
 
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to start mDNS service", e)
@@ -78,7 +111,6 @@ class AirPlayMdnsService(private val context: Context) {
     fun stop() {
         Thread {
             try {
-                serviceInfo?.let { jmDNS?.unregisterService(it) }
                 jmDNS?.unregisterAllServices()
                 jmDNS?.close()
                 jmDNS = null
@@ -87,19 +119,18 @@ class AirPlayMdnsService(private val context: Context) {
                     if (it.isHeld) it.release()
                 }
                 multicastLock = null
-
-                Log.d(TAG, "mDNS service stopped")
+                Log.d(TAG, "mDNS services stopped")
             } catch (e: Exception) {
                 Log.e(TAG, "Error stopping mDNS service", e)
             }
         }.start()
     }
 
+    fun getDeviceId(): String = deviceMac
+
     private fun getDeviceIpAddress(wifiManager: WifiManager): InetAddress {
-        // Try NetworkInterface first (no permissions needed)
         getIpFromNetworkInterface()?.let { return it }
 
-        // Fallback to WifiManager (needs ACCESS_FINE_LOCATION on Android 8+)
         @Suppress("DEPRECATION")
         val ipInt = wifiManager.connectionInfo.ipAddress
         if (ipInt != 0) {
@@ -111,7 +142,6 @@ class AirPlayMdnsService(private val context: Context) {
             )
             return InetAddress.getByAddress(ipBytes)
         }
-
         return InetAddress.getLocalHost()
     }
 
@@ -119,13 +149,9 @@ class AirPlayMdnsService(private val context: Context) {
         try {
             val interfaces = NetworkInterface.getNetworkInterfaces() ?: return null
             for (intf in interfaces) {
-                // Look for wlan or eth interfaces
                 val name = intf.name.lowercase()
-                if (!name.startsWith("wlan") && !name.startsWith("eth") && !name.startsWith("en")) {
-                    continue
-                }
+                if (!name.startsWith("wlan") && !name.startsWith("eth") && !name.startsWith("en")) continue
                 if (!intf.isUp || intf.isLoopback) continue
-
                 for (addr in intf.inetAddresses) {
                     if (addr is Inet4Address && !addr.isLoopbackAddress) {
                         Log.d(TAG, "Found IP via NetworkInterface(${intf.name}): ${addr.hostAddress}")

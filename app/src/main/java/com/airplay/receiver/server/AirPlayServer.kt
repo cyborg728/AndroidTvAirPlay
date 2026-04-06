@@ -268,7 +268,7 @@ class AirPlayServer(
     <key>deviceid</key>
     <string>AA:BB:CC:DD:EE:FF</string>
     <key>features</key>
-    <integer>1383391223</integer>
+    <integer>1518338039</integer>
     <key>model</key>
     <string>AppleTV3,2</string>
     <key>protovers</key>
@@ -282,6 +282,7 @@ class AirPlayServer(
 
     private fun handleInfo(): Response {
         Log.d(TAG, "Handling /info request")
+        // Return features as 64-bit: lower=0x5A7FFFF7 (1518338039), upper=0x1E (30)
         val plist = """<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -289,7 +290,7 @@ class AirPlayServer(
     <key>deviceid</key>
     <string>AA:BB:CC:DD:EE:FF</string>
     <key>features</key>
-    <integer>1383391223</integer>
+    <integer>1518338039</integer>
     <key>model</key>
     <string>AppleTV3,2</string>
     <key>name</key>
@@ -303,9 +304,31 @@ class AirPlayServer(
     <key>pi</key>
     <string>2e388006-13ba-4041-9a67-25dd4a43d536</string>
     <key>pk</key>
-    <data>sHcn1vbNbgi1hXHVJTkfmb6Y6HROXbzuXMtwVIXgW3E=</data>
+    <string>b07727d6f6cd6e08b58571d525391f99be98e8744e5dbcee5ccb705485e05b71</string>
     <key>vv</key>
     <integer>2</integer>
+    <key>audioFormats</key>
+    <array>
+        <dict>
+            <key>type</key>
+            <integer>96</integer>
+            <key>audioInputFormats</key>
+            <integer>67108860</integer>
+            <key>audioOutputFormats</key>
+            <integer>67108860</integer>
+        </dict>
+    </array>
+    <key>audioLatencies</key>
+    <array>
+        <dict>
+            <key>inputLatencyMicros</key>
+            <integer>0</integer>
+            <key>outputLatencyMicros</key>
+            <integer>400000</integer>
+            <key>type</key>
+            <integer>96</integer>
+        </dict>
+    </array>
 </dict>
 </plist>"""
         return newFixedLengthResponse(Response.Status.OK, "text/x-apple-plist+xml", plist)
