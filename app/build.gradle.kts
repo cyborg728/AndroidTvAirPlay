@@ -46,9 +46,6 @@ dependencies {
     implementation("androidx.media3:media3-exoplayer-dash:1.2.1")
     implementation("androidx.media3:media3-ui:1.2.1")
 
-    // NanoHTTPD for embedded HTTP server
-    implementation("org.nanohttpd:nanohttpd:2.3.1")
-
     // jmDNS for Bonjour/mDNS service advertisement
     implementation("org.jmdns:jmdns:3.5.9")
 

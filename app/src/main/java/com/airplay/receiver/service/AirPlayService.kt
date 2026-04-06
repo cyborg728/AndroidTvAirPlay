@@ -15,15 +15,14 @@ import android.util.Log
 import com.airplay.receiver.R
 import com.airplay.receiver.player.PlayerActivity
 import com.airplay.receiver.server.AirPlayMdnsService
-import com.airplay.receiver.server.AirPlayServer
+import com.airplay.receiver.server.AirPlayRtspServer
 import com.airplay.receiver.ui.MainActivity
 
 /**
  * Foreground service that keeps the AirPlay server and mDNS advertisement
- * running in the background. This allows receiving AirPlay connections
- * even when the app UI is not visible.
+ * running in the background.
  */
-class AirPlayService : Service(), AirPlayServer.AirPlayListener {
+class AirPlayService : Service(), AirPlayRtspServer.AirPlayListener {
 
     companion object {
         private const val TAG = "AirPlayService"
@@ -47,10 +46,9 @@ class AirPlayService : Service(), AirPlayServer.AirPlayListener {
         }
     }
 
-    private var airPlayServer: AirPlayServer? = null
+    private var airPlayServer: AirPlayRtspServer? = null
     private var mdnsService: AirPlayMdnsService? = null
 
-    // Playback state reported by PlayerActivity
     private var currentDuration: Double = 0.0
     private var currentPosition: Double = 0.0
     private var isPlaying: Boolean = false
@@ -88,17 +86,23 @@ class AirPlayService : Service(), AirPlayServer.AirPlayListener {
         try {
             val deviceName = getDeviceName()
 
-            // Start HTTP server
-            airPlayServer = AirPlayServer(AirPlayServer.AIRPLAY_PORT, this).apply {
-                start()
-            }
-            Log.d(TAG, "AirPlay server started on port ${AirPlayServer.AIRPLAY_PORT}")
-
-            // Start mDNS advertisement
+            // Start mDNS first to get deviceId
             mdnsService = AirPlayMdnsService(this).apply {
                 start(deviceName)
             }
-            Log.d(TAG, "mDNS service started with name: $deviceName")
+            val deviceId = mdnsService?.getDeviceId() ?: "AA:BB:CC:DD:EE:FF"
+            Log.d(TAG, "mDNS service started: $deviceName ($deviceId)")
+
+            // Start combined HTTP+RTSP server
+            airPlayServer = AirPlayRtspServer(
+                AirPlayRtspServer.AIRPLAY_PORT,
+                this,
+                deviceName,
+                deviceId
+            ).apply {
+                start()
+            }
+            Log.d(TAG, "AirPlay server started on port ${AirPlayRtspServer.AIRPLAY_PORT}")
 
             broadcastStatus(getString(R.string.status_service_running))
 
@@ -114,8 +118,6 @@ class AirPlayService : Service(), AirPlayServer.AirPlayListener {
             if (name.isBlank()) "Android TV AirPlay" else name
         }
     }
-
-    // --- AirPlayListener callbacks ---
 
     override fun onVideoPlay(url: String, startPosition: Double) {
         Log.d(TAG, "Play video: $url")
@@ -152,16 +154,14 @@ class AirPlayService : Service(), AirPlayServer.AirPlayListener {
         })
     }
 
-    override fun onVideoGetPlaybackInfo(): AirPlayServer.PlaybackInfo {
-        return AirPlayServer.PlaybackInfo(
+    override fun onVideoGetPlaybackInfo(): AirPlayRtspServer.PlaybackInfo {
+        return AirPlayRtspServer.PlaybackInfo(
             duration = currentDuration,
             position = currentPosition,
             rate = currentRate,
             isPlaying = isPlaying
         )
     }
-
-    // --- Notification ---
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -214,12 +214,9 @@ class AirPlayService : Service(), AirPlayServer.AirPlayListener {
     override fun onDestroy() {
         super.onDestroy()
         Log.d(TAG, "Service destroyed")
-
         unregisterReceiver(playbackInfoReceiver)
-
         airPlayServer?.stop()
         airPlayServer = null
-
         mdnsService?.stop()
         mdnsService = null
     }

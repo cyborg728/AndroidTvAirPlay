@@ -53,7 +53,7 @@ class AirPlayMdnsService(private val context: Context) {
                 val airplayProps = mapOf(
                     "deviceid" to deviceMac,
                     "features" to "0x5A7FFFF7,0x1E",
-                    "flags" to "0x44",
+                    "flags" to "0x4",
                     "model" to "AppleTV3,2",
                     "pi" to "2e388006-13ba-4041-9a67-25dd4a43d536",
                     "pk" to "b07727d6f6cd6e08b58571d525391f99be98e8744e5dbcee5ccb705485e05b71",
@@ -82,7 +82,7 @@ class AirPlayMdnsService(private val context: Context) {
                     "ft" to "0x5A7FFFF7,0x1E",
                     "md" to "0,1,2",
                     "pk" to "b07727d6f6cd6e08b58571d525391f99be98e8744e5dbcee5ccb705485e05b71",
-                    "sf" to "0x44",
+                    "sf" to "0x4",
                     "sr" to "44100",
                     "ss" to "16",
                     "sv" to "false",
