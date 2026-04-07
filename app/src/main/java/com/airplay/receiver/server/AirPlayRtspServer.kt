@@ -6,6 +6,7 @@ import com.airplay.receiver.crypto.PairVerifyHandler
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
 import java.io.OutputStream
+import java.net.DatagramSocket
 import java.net.ServerSocket
 import java.net.Socket
 import java.util.concurrent.ConcurrentHashMap
@@ -53,6 +54,11 @@ class AirPlayRtspServer(
     private val pairSetupHandlers = ConcurrentHashMap<String, PairSetupHandler>()
     private val pairVerifyHandlers = ConcurrentHashMap<String, PairVerifyHandler>()
 
+    // Allocated UDP ports for streaming
+    private var eventPort = 0
+    private var dataPort = 0
+    private var timingPort = 0
+
     fun start() {
         running = true
         executor = Executors.newCachedThreadPool()
@@ -84,15 +90,17 @@ class AirPlayRtspServer(
         val remoteAddr = socket.remoteSocketAddress.toString()
         Log.d(TAG, "Client connected: $remoteAddr")
         try {
-            socket.soTimeout = 30000
+            socket.soTimeout = 120000 // 2 minutes — iOS keeps connections alive
+            socket.keepAlive = true
             val input = socket.getInputStream()
             val output = socket.getOutputStream()
 
             while (running && !socket.isClosed) {
                 val request = readRequest(input) ?: break
+                val uriPath = request.uri.substringBefore('?')
                 Log.d(TAG, "Request from $remoteAddr: ${request.method} ${request.uri} ${request.protocol}")
 
-                val response = handleRequest(request, remoteAddr)
+                val response = handleRequest(request, uriPath, remoteAddr)
                 writeResponse(output, response, request.protocol)
                 output.flush()
 
@@ -192,23 +200,41 @@ class AirPlayRtspServer(
         }
     }
 
-    private fun handleRequest(request: Request, clientAddr: String): Response {
+    /** Parse query string parameters from URI */
+    private fun parseQueryParams(uri: String): Map<String, String> {
+        val queryString = uri.substringAfter('?', "")
+        if (queryString.isEmpty()) return emptyMap()
+        return queryString.split('&').mapNotNull { param ->
+            val parts = param.split('=', limit = 2)
+            if (parts.size == 2) parts[0] to parts[1] else null
+        }.toMap()
+    }
+
+    private fun handleRequest(request: Request, uriPath: String, clientAddr: String): Response {
         return try {
             when {
-                request.uri == "/info" -> handleInfo()
-                request.uri == "/server-info" -> handleServerInfo()
-                request.uri == "/pair-setup" -> handlePairSetup(request, clientAddr)
-                request.uri == "/pair-verify" -> handlePairVerify(request, clientAddr)
-                request.uri == "/fp-setup" -> handleFpSetup(request)
-                request.uri == "/feedback" -> ok()
-                request.uri == "/command" -> handleCommand(request)
-                request.uri == "/play" && request.method == "POST" -> handlePlay(request)
-                request.uri == "/stop" -> handleStop()
-                request.uri == "/rate" -> handleRate(request)
-                request.uri == "/scrub" && request.method == "POST" -> handleScrub(request)
-                request.uri == "/scrub" && request.method == "GET" -> handleGetScrub()
-                request.uri == "/playback-info" -> handlePlaybackInfo()
-                request.uri == "/action" -> handleAction(request)
+                uriPath == "/info" -> handleInfo()
+                uriPath == "/server-info" -> handleServerInfo()
+                uriPath == "/pair-setup" -> handlePairSetup(request, clientAddr)
+                uriPath == "/pair-verify" -> handlePairVerify(request, clientAddr)
+                uriPath == "/pair-pin-start" -> ok() // iOS asks to start PIN display
+                uriPath == "/fp-setup" -> handleFpSetup(request)
+                uriPath == "/fp-setup2" -> handleFpSetup(request) // AirPlay 2 variant
+                uriPath == "/feedback" -> ok()
+                uriPath == "/command" -> handleCommand(request)
+                uriPath == "/configure" -> handleConfigure(request)
+                uriPath == "/play" && request.method == "POST" -> handlePlay(request)
+                uriPath == "/stop" -> handleStop()
+                uriPath == "/rate" -> handleRate(request)
+                uriPath == "/scrub" && request.method == "POST" -> handleScrub(request)
+                uriPath == "/scrub" && request.method == "GET" -> handleGetScrub()
+                uriPath == "/playback-info" -> handlePlaybackInfo()
+                uriPath == "/action" -> handleAction(request)
+                uriPath == "/photo" -> handlePhoto(request)
+                uriPath == "/slideshow-features" -> handleSlideshowFeatures()
+                uriPath == "/volume" -> ok()
+                uriPath == "/getProperty" -> handleGetProperty(request)
+                uriPath == "/setProperty" -> handleSetProperty(request)
                 // RTSP methods
                 request.method == "SETUP" -> handleRtspSetup(request)
                 request.method == "ANNOUNCE" -> handleRtspAnnounce(request)
@@ -325,13 +351,10 @@ class AirPlayRtspServer(
         Log.d(TAG, "fp-setup: ${request.body.size} bytes")
 
         // FairPlay setup: iOS sends this for DRM negotiation.
-        // For non-DRM content (screen mirroring, YouTube links, etc.),
-        // we can respond with a minimal acknowledgment.
-        // The first byte indicates the FairPlay message type.
+        // For non-DRM content (YouTube links, etc.), we acknowledge but don't enforce.
         val fpType = if (request.body.isNotEmpty()) request.body[0].toInt() and 0xFF else -1
         Log.d(TAG, "fp-setup type: $fpType")
 
-        // Return 200 OK with empty body — tells iOS we acknowledge but don't enforce FairPlay
         return Response(200, "OK", mutableMapOf(
             "Content-Type" to "application/octet-stream"
         ), ByteArray(0))
@@ -349,30 +372,82 @@ class AirPlayRtspServer(
 
     private fun handleRtspSetup(request: Request): Response {
         val cseq = request.headers["cseq"] ?: "0"
-        Log.d(TAG, "RTSP SETUP: ${request.uri}")
-        Log.d(TAG, "SETUP body: ${String(request.body)}")
+        Log.d(TAG, "RTSP SETUP: ${request.uri}, body size: ${request.body.size}")
+
+        // iOS sends binary plist body with stream configuration
+        val contentType = request.headers["content-type"] ?: ""
+        val config = if (contentType.contains("bplist") || contentType.contains("binary") ||
+            (request.body.size > 8 && String(request.body, 0, 6, Charsets.US_ASCII) == "bplist")) {
+            BPlistDecoder.decodeAsMap(request.body)
+        } else {
+            null
+        }
+
+        if (config != null) {
+            Log.d(TAG, "SETUP config: $config")
+        } else {
+            Log.d(TAG, "SETUP body (text): ${String(request.body).take(200)}")
+        }
+
+        // Allocate UDP ports for streams
+        if (eventPort == 0) {
+            eventPort = allocateUdpPort()
+            dataPort = allocateUdpPort()
+            timingPort = allocateUdpPort()
+        }
 
         // Parse transport header
         val transport = request.headers["transport"] ?: ""
         Log.d(TAG, "Transport: $transport")
 
-        return Response(200, "OK", mutableMapOf(
-            "CSeq" to cseq,
-            "Session" to "AIRPLAY_SESSION",
-            "Transport" to transport
-        ))
+        // Build response — iOS expects stream port information
+        val responseMap = linkedMapOf<String, Any>(
+            "eventPort" to eventPort,
+            "timingPort" to timingPort,
+            "dataPort" to dataPort,
+            "isScreenMirroringSession" to false
+        )
+
+        // Check if this is a screen mirroring or stream request
+        val streamType = config?.get("type")
+        if (streamType != null) {
+            Log.d(TAG, "Stream type: $streamType")
+        }
+
+        return try {
+            val body = BPlistEncoder.encode(responseMap)
+            Response(200, "OK", mutableMapOf(
+                "CSeq" to cseq,
+                "Content-Type" to "application/x-apple-binary-plist",
+                "Session" to "AIRPLAY_SESSION"
+            ), body)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to encode SETUP response", e)
+            Response(200, "OK", mutableMapOf(
+                "CSeq" to cseq,
+                "Session" to "AIRPLAY_SESSION",
+                "Transport" to transport
+            ))
+        }
     }
 
     private fun handleRtspAnnounce(request: Request): Response {
         val cseq = request.headers["cseq"] ?: "0"
-        Log.d(TAG, "RTSP ANNOUNCE")
+        Log.d(TAG, "RTSP ANNOUNCE, body size: ${request.body.size}")
+        if (request.body.isNotEmpty()) {
+            Log.d(TAG, "ANNOUNCE body: ${String(request.body).take(500)}")
+        }
         return Response(200, "OK", mutableMapOf("CSeq" to cseq))
     }
 
     private fun handleRtspRecord(request: Request): Response {
         val cseq = request.headers["cseq"] ?: "0"
         Log.d(TAG, "RTSP RECORD")
-        return Response(200, "OK", mutableMapOf("CSeq" to cseq))
+        return Response(200, "OK", mutableMapOf(
+            "CSeq" to cseq,
+            "Audio-Latency" to "11025",
+            "Audio-Jack-Status" to "connected; type=analog"
+        ))
     }
 
     private fun handleTeardown(): Response {
@@ -383,12 +458,17 @@ class AirPlayRtspServer(
 
     private fun handleSetParameter(request: Request): Response {
         val cseq = request.headers["cseq"] ?: "0"
-        val body = String(request.body)
-        Log.d(TAG, "SET_PARAMETER: $body")
+        val contentType = request.headers["content-type"] ?: ""
 
-        // Check for volume, progress, etc.
-        if (body.contains("volume")) {
-            Log.d(TAG, "Volume change")
+        if (contentType.contains("bplist") || contentType.contains("binary")) {
+            val plist = BPlistDecoder.decodeAsMap(request.body)
+            Log.d(TAG, "SET_PARAMETER (plist): $plist")
+        } else {
+            val body = String(request.body)
+            Log.d(TAG, "SET_PARAMETER: $body")
+            if (body.contains("volume")) {
+                Log.d(TAG, "Volume change")
+            }
         }
 
         return Response(200, "OK", mutableMapOf("CSeq" to cseq))
@@ -397,25 +477,44 @@ class AirPlayRtspServer(
     // --- Playback handlers ---
 
     private fun handlePlay(request: Request): Response {
-        val body = String(request.body)
-        Log.d(TAG, "Play: $body")
+        Log.d(TAG, "Play: body size=${request.body.size}")
+        val contentType = request.headers["content-type"] ?: ""
 
         var videoUrl = ""
         var startPosition = 0.0
 
-        body.lines().forEach { line ->
-            val trimmed = line.trim()
-            when {
-                trimmed.startsWith("Content-Location:") ->
-                    videoUrl = trimmed.substringAfter("Content-Location:").trim()
-                trimmed.startsWith("Start-Position:") ->
-                    startPosition = trimmed.substringAfter("Start-Position:").trim().toDoubleOrNull() ?: 0.0
+        // Try binary plist first
+        if (contentType.contains("bplist") || contentType.contains("binary") ||
+            (request.body.size > 8 && String(request.body, 0, minOf(6, request.body.size), Charsets.US_ASCII) == "bplist")) {
+
+            val plist = BPlistDecoder.decodeAsMap(request.body)
+            Log.d(TAG, "Play plist: $plist")
+            if (plist != null) {
+                videoUrl = (plist["Content-Location"] ?: plist["content-location"] ?: "").toString()
+                startPosition = (plist["Start-Position"] ?: plist["start-position"] ?: 0.0) as? Double ?: 0.0
+            }
+        }
+
+        // Fall back to text parsing
+        if (videoUrl.isEmpty()) {
+            val body = String(request.body)
+            Log.d(TAG, "Play text: $body")
+            body.lines().forEach { line ->
+                val trimmed = line.trim()
+                when {
+                    trimmed.startsWith("Content-Location:", ignoreCase = true) ->
+                        videoUrl = trimmed.substringAfter(":").trim()
+                    trimmed.startsWith("Start-Position:", ignoreCase = true) ->
+                        startPosition = trimmed.substringAfter(":").trim().toDoubleOrNull() ?: 0.0
+                }
             }
         }
 
         if (videoUrl.isNotEmpty()) {
             Log.d(TAG, "Playing: $videoUrl at $startPosition")
             listener.onVideoPlay(videoUrl, startPosition)
+        } else {
+            Log.w(TAG, "Play: No video URL found in request")
         }
         return ok()
     }
@@ -426,17 +525,17 @@ class AirPlayRtspServer(
     }
 
     private fun handleRate(request: Request): Response {
-        val uri = request.uri
-        val rateStr = uri.substringAfter("value=", "1")
-        val rate = rateStr.toFloatOrNull() ?: 1.0f
+        val params = parseQueryParams(request.uri)
+        val rate = params["value"]?.toFloatOrNull() ?: 1.0f
+        Log.d(TAG, "Rate: $rate")
         if (rate == 0.0f) listener.onVideoPause() else listener.onVideoResume()
         return ok()
     }
 
     private fun handleScrub(request: Request): Response {
-        val uri = request.uri
-        val posStr = uri.substringAfter("position=", "0")
-        val position = posStr.toDoubleOrNull() ?: 0.0
+        val params = parseQueryParams(request.uri)
+        val position = params["position"]?.toDoubleOrNull() ?: 0.0
+        Log.d(TAG, "Scrub to: $position")
         listener.onVideoScrub(position)
         return ok()
     }
@@ -480,12 +579,63 @@ class AirPlayRtspServer(
     }
 
     private fun handleAction(request: Request): Response {
-        Log.d(TAG, "Action: ${String(request.body)}")
+        Log.d(TAG, "Action: body size=${request.body.size}")
+        val contentType = request.headers["content-type"] ?: ""
+        if (contentType.contains("bplist") || contentType.contains("binary")) {
+            val plist = BPlistDecoder.decodeAsMap(request.body)
+            Log.d(TAG, "Action plist: $plist")
+        } else {
+            Log.d(TAG, "Action: ${String(request.body)}")
+        }
         return ok()
     }
 
     private fun handleCommand(request: Request): Response {
-        Log.d(TAG, "Command: ${String(request.body)}")
+        Log.d(TAG, "Command: body size=${request.body.size}")
+        val contentType = request.headers["content-type"] ?: ""
+        if (contentType.contains("bplist") || contentType.contains("binary")) {
+            val plist = BPlistDecoder.decodeAsMap(request.body)
+            Log.d(TAG, "Command plist: $plist")
+        } else {
+            Log.d(TAG, "Command: ${String(request.body)}")
+        }
         return ok()
+    }
+
+    private fun handleConfigure(request: Request): Response {
+        Log.d(TAG, "Configure: body size=${request.body.size}")
+        return ok()
+    }
+
+    private fun handlePhoto(request: Request): Response {
+        Log.d(TAG, "Photo received: ${request.body.size} bytes")
+        return ok()
+    }
+
+    private fun handleSlideshowFeatures(): Response {
+        return ok()
+    }
+
+    private fun handleGetProperty(request: Request): Response {
+        Log.d(TAG, "GetProperty: ${request.uri}")
+        return ok()
+    }
+
+    private fun handleSetProperty(request: Request): Response {
+        Log.d(TAG, "SetProperty: body size=${request.body.size}")
+        return ok()
+    }
+
+    /** Allocate a random available UDP port */
+    private fun allocateUdpPort(): Int {
+        return try {
+            val socket = DatagramSocket(0)
+            val port = socket.localPort
+            socket.close()
+            port
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to allocate UDP port", e)
+            (49152..65535).random()
+        }
     }
 }
