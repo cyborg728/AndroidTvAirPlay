@@ -50,8 +50,8 @@ class AirPlayRtspServer(
     private var serverSocket: ServerSocket? = null
     private var executor: ExecutorService? = null
     private var running = false
-    private val pairSetupHandler = PairSetupHandler()
-    private val sessions = ConcurrentHashMap<String, PairVerifyHandler>()
+    private val pairSetupHandlers = ConcurrentHashMap<String, PairSetupHandler>()
+    private val pairVerifyHandlers = ConcurrentHashMap<String, PairVerifyHandler>()
 
     fun start() {
         running = true
@@ -197,7 +197,7 @@ class AirPlayRtspServer(
             when {
                 request.uri == "/info" -> handleInfo()
                 request.uri == "/server-info" -> handleServerInfo()
-                request.uri == "/pair-setup" -> handlePairSetup(request)
+                request.uri == "/pair-setup" -> handlePairSetup(request, clientAddr)
                 request.uri == "/pair-verify" -> handlePairVerify(request, clientAddr)
                 request.uri == "/fp-setup" -> handleFpSetup(request)
                 request.uri == "/feedback" -> ok()
@@ -296,23 +296,26 @@ class AirPlayRtspServer(
 
     // --- Pairing ---
 
-    private fun handlePairSetup(request: Request): Response {
-        Log.d(TAG, "pair-setup: ${request.body.size} bytes")
-        val responseData = pairSetupHandler.handle(request.body)
+    private fun handlePairSetup(request: Request, clientAddr: String): Response {
+        Log.d(TAG, "pair-setup: ${request.body.size} bytes from $clientAddr, hex=${request.body.take(16).joinToString("") { "%02x".format(it) }}...")
+        val handler = pairSetupHandlers.getOrPut(clientAddr) { PairSetupHandler() }
+        val responseData = handler.handle(request.body)
+        Log.d(TAG, "pair-setup response: ${responseData.size} bytes")
         return Response(200, "OK", mutableMapOf(
             "Content-Type" to "application/octet-stream"
         ), responseData)
     }
 
     private fun handlePairVerify(request: Request, clientAddr: String): Response {
-        Log.d(TAG, "pair-verify: ${request.body.size} bytes from $clientAddr")
-        val handler = sessions.getOrPut(clientAddr) { PairVerifyHandler() }
+        Log.d(TAG, "pair-verify: ${request.body.size} bytes from $clientAddr, hex=${request.body.take(16).joinToString("") { "%02x".format(it) }}...")
+        val handler = pairVerifyHandlers.getOrPut(clientAddr) { PairVerifyHandler() }
         val responseData = handler.handle(request.body)
 
         if (handler.isComplete()) {
             Log.d(TAG, "pair-verify COMPLETE for $clientAddr")
         }
 
+        Log.d(TAG, "pair-verify response: ${responseData.size} bytes")
         return Response(200, "OK", mutableMapOf(
             "Content-Type" to "application/octet-stream"
         ), responseData)
@@ -320,6 +323,15 @@ class AirPlayRtspServer(
 
     private fun handleFpSetup(request: Request): Response {
         Log.d(TAG, "fp-setup: ${request.body.size} bytes")
+
+        // FairPlay setup: iOS sends this for DRM negotiation.
+        // For non-DRM content (screen mirroring, YouTube links, etc.),
+        // we can respond with a minimal acknowledgment.
+        // The first byte indicates the FairPlay message type.
+        val fpType = if (request.body.isNotEmpty()) request.body[0].toInt() and 0xFF else -1
+        Log.d(TAG, "fp-setup type: $fpType")
+
+        // Return 200 OK with empty body — tells iOS we acknowledge but don't enforce FairPlay
         return Response(200, "OK", mutableMapOf(
             "Content-Type" to "application/octet-stream"
         ), ByteArray(0))
