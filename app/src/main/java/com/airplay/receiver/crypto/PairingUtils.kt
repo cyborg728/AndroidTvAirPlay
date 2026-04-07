@@ -57,6 +57,23 @@ object PairingUtils {
         return output
     }
 
+    /**
+     * HKDF-Expand only (skips Extract step).
+     * Used by pair-verify where the shared secret from X25519 ECDH
+     * is already high-entropy and used directly as PRK.
+     */
+    fun hkdfExpandSha512(
+        prk: ByteArray,
+        info: ByteArray,
+        outputLength: Int
+    ): ByteArray {
+        val hkdf = HKDFBytesGenerator(SHA512Digest())
+        hkdf.init(HKDFParameters.skipExtractParameters(prk, info))
+        val output = ByteArray(outputLength)
+        hkdf.generateBytes(output, 0, outputLength)
+        return output
+    }
+
     fun ed25519Sign(
         privateKey: Ed25519PrivateKeyParameters,
         message: ByteArray
